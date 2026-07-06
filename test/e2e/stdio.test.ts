@@ -57,14 +57,37 @@ beforeAll(async () => {
 afterAll(() => { proc?.kill(); });
 
 describe('lens stdio e2e — unified code + docs', () => {
-  test('exposes all 11 tools, each with a rich description', async () => {
+  test('exposes all 12 tools, each with a rich description', async () => {
     const res = await rpc('tools/list', {});
     const names = res.result.tools.map((t: any) => t.name).sort();
     expect(names).toEqual([
       'comments', 'find', 'function_body', 'functions', 'heading',
-      'info', 'links', 'map', 'outline', 'overview', 'search',
+      'info', 'lens_system', 'links', 'map', 'outline', 'overview', 'search',
     ]);
     for (const t of res.result.tools) expect(t.description.length).toBeGreaterThan(120);
+  });
+
+  test('lens_system status reports version + the install dir (not the sandbox cwd)', async () => {
+    const { body, isError } = await call('lens_system', { action: 'status' });
+    expect(isError).toBe(false);
+    expect(body.name).toBe('lens-mcp');
+    expect(body.versionRunning).toBe(pkg.version);
+    expect(body.installDir).toBe(ROOT);          // the lens repo, resolved from import.meta.url
+    expect(body.installType).toBe('git');
+    expect(body.update).toBeDefined();           // present even if offline
+  });
+
+  test('lens_system agents_md returns the current guide', async () => {
+    const { body, isError } = await call('lens_system', { action: 'agents_md' });
+    expect(isError).toBe(false);
+    expect(body.content).toContain('navigation map');
+    expect(body.note).toContain('persistent config');
+  });
+
+  test('lens_system update defaults to a dry run', async () => {
+    const { body } = await call('lens_system', { action: 'update' });
+    expect(body.mode).toBe('dry_run');
+    expect(body.note).toContain('apply=true');
   });
 
   test('info reports the merged surface', async () => {
@@ -75,7 +98,7 @@ describe('lens stdio e2e — unified code + docs', () => {
     expect(body.workingDirectory).toBe(CWD);
     expect(body.code.languages.python).toContain('.py');
     expect(body.docs.extensions).toContain('.md');
-    expect(body.tools).toHaveLength(11);
+    expect(body.tools).toHaveLength(12);
   });
 
   test('map returns BOTH code files and docs in one call', async () => {

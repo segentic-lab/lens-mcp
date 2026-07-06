@@ -1,6 +1,6 @@
 {
   "name": "lens-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Deterministic navigation maps over code AND markdown for AI agents \u2014 one MCP server, tree-sitter + markdown lenses",
   "type": "module",
   "main": "dist/index.js",

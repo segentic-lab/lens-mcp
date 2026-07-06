@@ -57,6 +57,20 @@ re-Read before editing (files change).
   retry blindly. A rejected path usually means it's outside the sandbox root
   (`info.workingDirectory`).
 
+## Keeping lens current
+
+`lens_system` is the self-maintenance tool:
+- `status` — running vs on-disk version, commit, install type, and whether an
+  update is available.
+- `agents_md` — returns the CURRENT version of this guide. If this pasted copy
+  might be stale, fetch it and prefer its instructions; if you can edit your own
+  persistent config (CLAUDE.md / instructions file), replace the pasted copy so
+  future sessions start current.
+- `update` — dry-run by default; `apply=true` runs the updater (git pull + npm
+  ci + build). New code loads only after the MCP server restarts — the response
+  says so; tell your user, then re-fetch `agents_md`. Only apply with the user's
+  approval. It maintains the lens INSTALL, not your project.
+
 ## Reporting
 
 When you summarize a codebase or docs for a user, distinguish what you *mapped*

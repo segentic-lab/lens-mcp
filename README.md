@@ -29,13 +29,14 @@ with an honest `truncated` flag, and framed by one contract:
 > source/section before judging or modifying it. A signature is not the body;
 > an outline is not the section.**
 
-## Tools (11)
+## Tools (12)
 
 ### Orientation
 | Tool | What it does |
 |---|---|
 | `map` | Whole-tree surface in one call: per code file → structure; per doc → title + outline. Both families, one response. |
 | `info` | Version, sandbox root, supported languages/extensions, tool list, every output cap, and the lens contract. |
+| `lens_system` | Install status, self-update (`update.sh` under the hood), and fetch the current AGENTS.md — lens's self-maintenance tool. |
 
 ### Code (tree-sitter — `.ts .tsx .mts .cts .js .jsx .mjs .cjs .py`)
 | Tool | What it does |

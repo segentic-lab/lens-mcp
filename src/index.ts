@@ -7,6 +7,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as code from './code.js';
 import * as docs from './docs.js';
+import { lensSystem } from './system.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -119,7 +120,7 @@ server.tool(
       workingDirectory: process.cwd(),
       code: { languages },
       docs: { extensions: DOC_EXTS },
-      tools: ['map', 'overview', 'functions', 'function_body', 'comments', 'find', 'outline', 'heading', 'links', 'search', 'info'],
+      tools: ['map', 'overview', 'functions', 'function_body', 'comments', 'find', 'outline', 'heading', 'links', 'search', 'info', 'lens_system'],
       limits: ALL_LIMITS,
       contract: LENS_CONTRACT,
     });
@@ -247,6 +248,26 @@ server.tool(
   },
   async ({ query, dir, recursive, max_results }) => {
     const result = await docs.searchDocs(query, dir, recursive ?? true, max_results ?? docs.LIMITS.searchMaxResultsDefault);
+    return respond(result, isErr(result));
+  },
+);
+
+// ============================ self-maintenance ============================
+
+server.tool(
+  'lens_system',
+  'Install status, self-update, and the current agent guide — lens\'s self-maintenance tool. ' +
+  "action='status' (read-only): running vs on-disk version, git commit, install type, install directory, Node version, and whether an update is available. " +
+  "action='agents_md' (read-only): returns the CURRENT AGENTS.md so you can refresh a stale pasted copy of your operating guide. " +
+  "action='update': dry-run by default (commits behind + incoming changes); apply=true runs update.sh (git pull + npm ci + build + self-test) — new code loads only after the MCP server restarts, and the response says so. force=true stashes local edits. Managed installs (no .git) refuse with guidance. " +
+  'Note: this operates on the lens INSTALL directory, not your project (the code tools\' sandbox). Returns JSON.',
+  {
+    action: z.enum(['status', 'update', 'agents_md']).optional().describe("status = version/commit/update-check (default); update = check or apply an update; agents_md = fetch the current agent guide"),
+    apply: z.boolean().optional().describe("For action='update': actually run the update instead of the dry-run check (default false)."),
+    force: z.boolean().optional().describe("For action='update' with apply=true: auto-stash local modifications first (recoverable via `git stash pop`)."),
+  },
+  async ({ action, apply, force }) => {
+    const result = await lensSystem({ action, apply, force });
     return respond(result, isErr(result));
   },
 );
