@@ -82,7 +82,7 @@ git clone https://github.com/segentic-lab/lens-mcp && cd lens-mcp && ./install.s
 No system packages and no native build — tree-sitter runs as WebAssembly, so it
 works anywhere **Node 18+** runs (Linux, macOS, Windows via WSL/Git Bash). The
 installer checks Node, runs `npm ci`, builds (`tsc → dist/`), self-tests the full
-suite (135 tests), and generates `mcp-config.json`.
+suite (138 tests), and generates `mcp-config.json`.
 
 **Register it with your client** — the generated `mcp-config.json` looks like:
 
