@@ -71,16 +71,45 @@ helpful pointer to the right tool — no silent confusion.
 
 ## Install
 
+One line clones, installs, and writes a ready-to-paste MCP config with this
+install's absolute path:
+
 ```bash
-npm install
-npm run build     # tsc → dist/
-npm test          # full suite (135 tests: unit + stdio e2e)
-node dist/index.js  # stdio MCP server; its cwd is the sandbox root
+git clone https://github.com/segentic-lab/lens-mcp && cd lens-mcp && ./install.sh
 ```
 
-Point your MCP client at `node /abs/path/lens-mcp/dist/index.js`. The server
-reads files under its **working directory** — launch it at the project root you
-want it to see.
+No system packages and no native build — tree-sitter runs as WebAssembly, so it
+works anywhere **Node 18+** runs (Linux, macOS, Windows via WSL/Git Bash). The
+installer checks Node, runs `npm ci`, builds (`tsc → dist/`), self-tests the full
+suite (135 tests), and generates `mcp-config.json`.
+
+**Register it with your client** — the generated `mcp-config.json` looks like:
+
+```json
+{
+  "mcpServers": {
+    "lens": { "command": "node", "args": ["/abs/path/lens-mcp/dist/index.js"] }
+  }
+}
+```
+
+- **Claude Code:** `claude mcp add lens -- node /abs/path/lens-mcp/dist/index.js`
+  (or copy `mcp-config.json` into a project as `.mcp.json`)
+- **Cursor / Windsurf:** merge `mcp-config.json` into `~/.cursor/mcp.json`
+- **Codex CLI:** add `[mcp_servers.lens]` with the same command/args to `~/.codex/config.toml`
+
+lens reads files under its **working directory** — the project your client
+launches it in. Point it at a project and call `map(".")`. Nothing outside the
+working directory is readable.
+
+**Update** later, in place:
+
+```bash
+./update.sh          # git pull --ff-only + reinstall + self-test
+```
+
+<sub>Prefer to do it by hand? `npm install && npm run build && npm test`, then
+run `node dist/index.js`.</sub>
 
 ## Lineage
 
