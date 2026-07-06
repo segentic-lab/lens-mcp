@@ -1,0 +1,53 @@
+{
+  "name": "lens-mcp",
+  "version": "0.1.0",
+  "description": "Deterministic navigation maps over code AND markdown for AI agents \u2014 one MCP server, tree-sitter + markdown lenses",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "lens-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "AGPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/segentic-lab/codelens-mcp.git"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "tree-sitter",
+    "code-analysis",
+    "ai-agents",
+    "typescript",
+    "javascript",
+    "python"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "web-tree-sitter": "^0.24.0",
+    "tree-sitter-javascript": "^0.23.0",
+    "tree-sitter-python": "^0.23.0",
+    "tree-sitter-typescript": "^0.23.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
