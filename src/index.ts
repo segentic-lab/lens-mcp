@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import * as code from './code.js';
 import * as docs from './docs.js';
 import { lensSystem } from './system.js';
+import * as prisma from './prisma.js';
+import * as nodepath from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -100,10 +102,15 @@ server.tool(
             totalDocs: docOk.totalDocs, truncated: docOk.truncated,
           }
         : { error: (docList as docs.ErrorResult).error },
+      schemas: schemasFor(p),
       summary: { codeFiles: codeOk?.filesParsed ?? 0, docFiles: docOk?.docs.length ?? 0 },
     });
   },
 );
+
+function schemasFor(p: string): Array<{ path: string; models: number; enums: number; types: number }> {
+  try { return prisma.listSchemas(code.validatePath(p)); } catch { return []; }
+}
 
 server.tool(
   'info',
@@ -120,12 +127,23 @@ server.tool(
       workingDirectory: process.cwd(),
       code: { languages },
       docs: { extensions: DOC_EXTS },
-      tools: ['map', 'overview', 'functions', 'function_body', 'comments', 'find', 'outline', 'heading', 'links', 'search', 'info', 'lens_system'],
+      tools: ['map', 'overview', 'functions', 'function_body', 'comments', 'find', 'outline', 'heading', 'links', 'search', 'references', 'info', 'lens_system'],
       limits: ALL_LIMITS,
       contract: LENS_CONTRACT,
     });
   },
 );
+
+// overview is polymorphic across code, Prisma schemas, and (honestly) JSON.
+async function overviewDispatch(f: string): Promise<unknown> {
+  const ext = nodepath.extname(f).toLowerCase();
+  if (ext === '.prisma') return prisma.overviewPrisma(f);
+  if (ext === '.json') {
+    return { error: `JSON is not structurally mapped: ${f}`, path: f,
+      hint: 'lens maps code, Prisma schemas, and markdown. For JSON config/i18n, read the file or grep for a key.' };
+  }
+  return code.overview(f);
+}
 
 // ============================ code drill-down ============================
 
@@ -137,7 +155,7 @@ server.tool(
   `Lists cap at ${code.LIMITS.maxListEntries} (truncated.<list> holds the true total). Languages: TS/TSX/JS/JSX/Python (Python exports from __all__). ` +
   'For markdown files use outline instead. Use FIRST to orient in an unfamiliar source file. ' + LENS_CONTRACT,
   { path: codePathParam },
-  async ({ path: p }) => runOnPaths(p, f => code.overview(f)),
+  async ({ path: p }) => runOnPaths(p, overviewDispatch),
 );
 
 server.tool(
@@ -185,17 +203,65 @@ server.tool(
 
 server.tool(
   'find',
-  'Locate a function, method, or class DEFINITION by name across a directory — "where is X defined?" without grepping. (For text inside markdown docs use search.) ' +
+  'Locate a DEFINITION by name across a directory — "where is X defined?" without grepping. Finds functions, methods, classes, AND non-callable top-level symbols: const/let/var bindings, type aliases, interfaces, and enums (a codebase\'s source-of-truth often lives in `export const …`). For text inside markdown docs use search; for who USES a symbol use references. ' +
   'Returns JSON {query, path, matches[{file, name, kind, line, signature, parent}], filesScanned, totalSupportedFiles, truncated, skipped?}. ' +
-  'Matching is case-insensitive substring by default; exact:true for exact-name. Unsearchable files are listed in skipped with the reason. ' +
+  "kind is function|method|arrow|getter|setter|class|const|let|var|type|interface|enum|variable. Matching is case-insensitive substring by default; exact:true for exact-name. Unsearchable files are listed in skipped with the reason. " +
   `Caps: scans up to ${code.LIMITS.maxFindFiles} files, returns up to ${code.LIMITS.maxFindMatches} matches (truncated:true = more exist). Definitions only, not call sites. Languages: TS/TSX/JS/JSX/Python. ` + LENS_CONTRACT,
   {
-    name: z.string().describe('Symbol name (function/method/class). Substring match unless exact:true.'),
+    name: z.string().describe('Symbol name (function/method/class/const/type/enum/…). Substring match unless exact:true.'),
     path: z.string().optional().describe('Directory (or single file) to search. Default "." (whole workspace).'),
     exact: z.boolean().optional().describe('Exact, case-sensitive match instead of case-insensitive substring (default false).'),
   },
   async ({ name, path: p, exact }) => {
     const result = await code.findSymbol(name, p ?? '.', undefined, exact ?? false);
+    if (!isErr(result)) {
+      // Also scan Prisma schemas (models/enums/types/fields) under the same path.
+      try {
+        const dir = code.validatePath(p ?? '.');
+        const stat = fs.statSync(dir);
+        const files = stat.isFile()
+          ? (dir.endsWith('.prisma') ? [nodepath.basename(dir)] : [])
+          : prismaFilesUnder(dir);
+        const base = stat.isFile() ? nodepath.dirname(dir) : dir;
+        if (files.length) {
+          const pm = prisma.findPrismaSymbols(files, base, name.trim(), exact ?? false);
+          (result as code.FindResult).matches.push(...pm.matches.map(m => ({
+            file: m.file, name: m.name, kind: m.kind as unknown as code.SymbolKind, line: m.line, signature: null, parent: m.parent,
+          })));
+        }
+      } catch { /* prisma is best-effort; code find already succeeded */ }
+    }
+    return respond(result, isErr(result));
+  },
+);
+
+function prismaFilesUnder(dir: string): string[] {
+  const out: string[] = [];
+  const IGNORE = new Set(['node_modules', '.git', 'dist', 'build', 'venv', '__pycache__', 'target', 'vendor']);
+  const walk = (abs: string, rel: string) => {
+    let entries; try { entries = fs.readdirSync(abs, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (out.length >= 300) return;
+      if (e.isDirectory()) { if (!IGNORE.has(e.name) && !e.name.startsWith('.')) walk(nodepath.join(abs, e.name), rel ? nodepath.join(rel, e.name) : e.name); }
+      else if (e.name.endsWith('.prisma')) out.push(rel ? nodepath.join(rel, e.name) : e.name);
+    }
+  };
+  walk(dir, '');
+  return out;
+}
+
+server.tool(
+  'references',
+  'Find who USES a symbol across a directory — the inverse of find. "Who calls X", "what imports it", "where is it used as a type". The reference workflow lens otherwise sends you to grep for, but tree-sitter-backed so a same-named string or comment is never a false positive. ' +
+  'Returns JSON {symbol, path, references[{file, line, kind, context}], byKind, filesScanned, totalSupportedFiles, truncated, skipped?}. ' +
+  "kind is call | instantiation | import | type-ref | reference | definition (the definition site is included, labelled). context is the source line. Matching is EXACT (references need precision). " +
+  `Caps: scans up to ${code.LIMITS.maxRefFiles} files, returns up to ${code.LIMITS.maxRefMatches} references (truncated:true = more exist — narrow the path). Languages: TS/TSX/JS/JSX/Python. ` + LENS_CONTRACT,
+  {
+    name: z.string().describe('Exact symbol name to find references for (a function/class/const/type from find or overview).'),
+    path: z.string().optional().describe('Directory (or single file) to search. Default "." (whole workspace).'),
+  },
+  async ({ name, path: p }) => {
+    const result = await code.findReferences(name, p ?? '.');
     return respond(result, isErr(result));
   },
 );

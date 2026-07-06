@@ -1,11 +1,11 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "io.github.segentic-lab/lens-mcp",
-  "description": "Deterministic navigation maps over code + markdown for AI agents: 11 MCP tools (TS/JS/Python)",
+  "description": "Deterministic navigation maps over code + markdown + Prisma for AI agents: 13 MCP tools",
   "repository": {
     "url": "https://github.com/segentic-lab/lens-mcp",
     "source": "github"
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "websiteUrl": "https://github.com/segentic-lab/lens-mcp"
 }

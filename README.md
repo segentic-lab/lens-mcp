@@ -29,7 +29,7 @@ with an honest `truncated` flag, and framed by one contract:
 > source/section before judging or modifying it. A signature is not the body;
 > an outline is not the section.**
 
-## Tools (12)
+## Tools (13)
 
 ### Orientation
 | Tool | What it does |
@@ -38,14 +38,15 @@ with an honest `truncated` flag, and framed by one contract:
 | `info` | Version, sandbox root, supported languages/extensions, tool list, every output cap, and the lens contract. |
 | `lens_system` | Install status, self-update (`update.sh` under the hood), and fetch the current AGENTS.md — lens's self-maintenance tool. |
 
-### Code (tree-sitter — `.ts .tsx .mts .cts .js .jsx .mjs .cjs .py`)
+### Code (tree-sitter — `.ts .tsx .mts .cts .js .jsx .mjs .cjs .py`) + Prisma (`.prisma`)
 | Tool | What it does |
 |---|---|
 | `overview` | One file's imports, exports, classes (+ methods), top-level functions, with line ranges. |
 | `functions` | Every function incl. nested — signatures, params/types, `parent` scope, kind. |
 | `function_body` | Verbatim source of ONE function — the focused read. |
 | `comments` | Comments + `TODO/FIXME/BUG/HACK/…` markers (`markersOnly` for the debt list). |
-| `find` | Locate a function/method/class **definition** by name across a directory. |
+| `find` | Locate a **definition** by name — functions, classes, and now `const`/`type`/`enum`/exports — across a directory. |
+| `references` | The inverse: who **uses** a symbol — call sites, imports, type-refs — tree-sitter-precise, no grep false positives. |
 
 ### Docs (markdown — `.md .markdown .mdx`)
 | Tool | What it does |
@@ -54,6 +55,8 @@ with an honest `truncated` flag, and framed by one contract:
 | `heading` | Read ONE section by heading text / slug / line number. |
 | `links` | Extract inline / image / wikilink / autolink / reference links. |
 | `search` | Case-insensitive full-text search across docs (heading hits ranked first). |
+
+`overview`/`find`/`map` also cover **Prisma schemas** (`schema.prisma` → models, enums, fields, relations). JSON config/i18n isn't structurally mapped — lens says so honestly and points you to grep.
 
 Call a code tool on a `.md` (or a doc tool on a `.ts`) and it fails with a
 helpful pointer to the right tool — no silent confusion.
@@ -82,7 +85,7 @@ git clone https://github.com/segentic-lab/lens-mcp && cd lens-mcp && ./install.s
 No system packages and no native build — tree-sitter runs as WebAssembly, so it
 works anywhere **Node 18+** runs (Linux, macOS, Windows via WSL/Git Bash). The
 installer checks Node, runs `npm ci`, builds (`tsc → dist/`), self-tests the full
-suite (138 tests), and generates `mcp-config.json`.
+suite (143 tests), and generates `mcp-config.json`.
 
 **Register it with your client** — the generated `mcp-config.json` looks like:
 

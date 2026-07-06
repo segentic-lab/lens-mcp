@@ -22,6 +22,9 @@ export const LIMITS = {
   maxMethodsPerClass: 100,
   maxParams: 30,
   maxBodyChars: 20_000,
+  maxRefFiles: 400,
+  maxRefMatches: 300,
+  maxRefContextChars: 200,
 } as const;
 
 // --- Types ---
@@ -125,13 +128,45 @@ export interface MapResult {
   truncated: boolean;
 }
 
+export type SymbolKind =
+  | FunctionKind | 'class'
+  | 'const' | 'let' | 'var' | 'type' | 'interface' | 'enum' | 'variable';
+
 export interface FindMatch {
   file: string;
   name: string;
-  kind: FunctionKind | 'class';
+  kind: SymbolKind;
   line: number;
   signature: string | null;
   parent: string | null;
+}
+
+export interface BindingEntry {
+  name: string;
+  kind: 'const' | 'let' | 'var' | 'type' | 'interface' | 'enum' | 'variable';
+  line: number;
+  exported: boolean;
+}
+
+export type ReferenceKind = 'call' | 'instantiation' | 'import' | 'type-ref' | 'reference' | 'definition';
+
+export interface ReferenceEntry {
+  file: string;
+  line: number;
+  kind: ReferenceKind;
+  context: string;
+}
+
+export interface ReferencesResult {
+  symbol: string;
+  path: string;
+  references: ReferenceEntry[];
+  filesScanned: number;
+  totalSupportedFiles: number;
+  truncated: boolean;
+  byKind: Record<string, number>;
+  skipped?: Array<{ file: string; error: string }>;
+  skippedTotal?: number;
 }
 
 export interface FindResult {
@@ -1315,6 +1350,15 @@ export async function findSymbol(
             matches.push({ file: rel, name: c.name, kind: 'class', line: c.line, signature: null, parent: null });
           }
         }
+        // Non-callable bindings: const/let/var, type aliases, interfaces, enums
+        // (issue #2). Function-valued declarators are excluded by the collectors.
+        const bindings = language === 'python' ? collectPyBindings(tree.rootNode) : collectTSBindings(tree.rootNode);
+        for (const b of bindings) {
+          if (matches.length >= LIMITS.maxFindMatches) break;
+          if (matchName(b.name, needle, exact)) {
+            matches.push({ file: rel, name: b.name, kind: b.kind, line: b.line, signature: null, parent: null });
+          }
+        }
         scanned++;
       } catch (e: unknown) {
         // an unsearched file must never look searched — list it as skipped
@@ -1346,6 +1390,188 @@ export async function findSymbol(
 function matchName(candidate: string, needle: string, exact: boolean): boolean {
   if (exact) return candidate === needle;
   return candidate.toLowerCase().includes(needle.toLowerCase());
+}
+
+// --- Non-callable top-level bindings (issue #2: const/let/type/enum/…) ---
+// find covered functions/classes only, but a codebase's source-of-truth often
+// lives in `export const ALL_MODULES = [...]`, type aliases, and enums. These
+// collectors surface those as findable symbols. Functions-valued bindings are
+// left to the function collectors (they carry signatures) to avoid duplicates.
+
+function tsDeclKind(declNode: Parser.SyntaxNode): 'const' | 'let' | 'var' {
+  const kw = declNode.children[0]?.text;
+  return kw === 'let' ? 'let' : kw === 'var' ? 'var' : 'const';
+}
+
+function collectTSBindingsFrom(node: Parser.SyntaxNode, exported: boolean, out: BindingEntry[]): void {
+  if (node.type === 'lexical_declaration' || node.type === 'variable_declaration') {
+    const kind = tsDeclKind(node);
+    for (const vd of node.children) {
+      if (vd.type !== 'variable_declarator') continue;
+      const nameNode = vd.childForFieldName('name');
+      const value = vd.childForFieldName('value');
+      // functions-valued declarators are handled by the function collectors
+      if (nameNode && nameNode.type === 'identifier' && !(value && isFunctionValue(value))) {
+        out.push({ name: nameNode.text, kind, line: node.startPosition.row + 1, exported });
+      }
+    }
+  } else if (node.type === 'type_alias_declaration') {
+    const n = node.childForFieldName('name')?.text;
+    if (n) out.push({ name: n, kind: 'type', line: node.startPosition.row + 1, exported });
+  } else if (node.type === 'interface_declaration') {
+    const n = node.childForFieldName('name')?.text;
+    if (n) out.push({ name: n, kind: 'interface', line: node.startPosition.row + 1, exported });
+  } else if (node.type === 'enum_declaration') {
+    const n = node.childForFieldName('name')?.text;
+    if (n) out.push({ name: n, kind: 'enum', line: node.startPosition.row + 1, exported });
+  }
+}
+
+function collectTSBindings(root: Parser.SyntaxNode): BindingEntry[] {
+  const out: BindingEntry[] = [];
+  for (const child of root.children) {
+    if (child.type === 'export_statement') {
+      for (const inner of child.children) collectTSBindingsFrom(inner, true, out);
+    } else {
+      collectTSBindingsFrom(child, false, out);
+    }
+  }
+  return out;
+}
+
+function collectPyBindings(root: Parser.SyntaxNode): BindingEntry[] {
+  const out: BindingEntry[] = [];
+  for (const child of root.children) {
+    if (child.type !== 'expression_statement') continue;
+    const assign = child.children[0];
+    if (assign?.type !== 'assignment') continue;
+    const left = assign.childForFieldName('left');
+    const right = assign.childForFieldName('right');
+    if (!left || left.type !== 'identifier' || left.text === '__all__') continue;
+    if (right && (right.type === 'lambda')) continue; // lambda is function-ish
+    out.push({ name: left.text, kind: 'variable', line: child.startPosition.row + 1, exported: false });
+  }
+  return out;
+}
+
+// --- Tool: references (issue #1: who calls / imports / type-refs X) ---
+
+function classifyReference(node: Parser.SyntaxNode): ReferenceKind | null {
+  const parent = node.parent;
+  if (!parent) return 'reference';
+  const pt = parent.type;
+  // web-tree-sitter recreates node objects per access — compare .id, NEVER ===
+  // (this exact gotcha silently mislabels every reference otherwise).
+  const isField = (n: Parser.SyntaxNode, field: string) => parent.childForFieldName(field)?.id === n.id;
+  // Definition sites: the identifier is the 'name'/'left' of a declaration.
+  if (['function_declaration', 'generator_function_declaration', 'class_declaration',
+    'method_definition', 'variable_declarator', 'type_alias_declaration', 'interface_declaration',
+    'enum_declaration', 'function_definition', 'class_definition'].includes(pt)
+    && (isField(node, 'name') || isField(node, 'left'))) {
+    return 'definition';
+  }
+  // Imports.
+  if (['import_specifier', 'namespace_import', 'import_clause', 'import_statement',
+    'import_from_statement', 'dotted_name', 'aliased_import'].includes(pt)) return 'import';
+  // Calls: identifier is the callee (function field of a call).
+  if ((pt === 'call_expression' || pt === 'call') && isField(node, 'function')) return 'call';
+  if (pt === 'member_expression' && parent.parent?.type === 'call_expression'
+    && parent.parent.childForFieldName('function')?.id === parent.id) return 'call';
+  if (pt === 'new_expression') return 'instantiation';
+  // Type positions.
+  if (node.type === 'type_identifier') return 'type-ref';
+  if (['type_annotation', 'type_arguments', 'generic_type', 'extends_clause', 'implements_clause'].includes(pt)) return 'type-ref';
+  return 'reference';
+}
+
+function collectReferences(
+  node: Parser.SyntaxNode, name: string, source: string, file: string, out: ReferenceEntry[], seenLines: Set<number>,
+): void {
+  const REF_NODE_TYPES = new Set(['identifier', 'type_identifier', 'property_identifier', 'shorthand_property_identifier']);
+  const walk = (n: Parser.SyntaxNode) => {
+    if (REF_NODE_TYPES.has(n.type) && n.text === name) {
+      const line = n.startPosition.row + 1;
+      const key = line * 8 + Math.min(n.startPosition.column, 7);
+      if (!seenLines.has(key)) {
+        seenLines.add(key);
+        const kind = classifyReference(n);
+        if (kind) {
+          const raw = (source.split('\n')[n.startPosition.row] ?? '').trim();
+          out.push({ file, line, kind, context: raw.length > LIMITS.maxRefContextChars ? raw.slice(0, LIMITS.maxRefContextChars) + '…' : raw });
+        }
+      }
+    }
+    for (const c of n.children) walk(c);
+  };
+  walk(node);
+}
+
+/**
+ * Every reference to a symbol across a directory — call sites, imports, type
+ * references, and the definition — tree-sitter-backed so a same-named string or
+ * comment is never a false positive. Exact name match (references need
+ * precision). The inverse of find (which locates definitions).
+ */
+export async function findReferences(
+  name: string, rawPath: string, cwd?: string,
+): Promise<ReferencesResult | ErrorResult> {
+  try {
+    if (!name || name.trim() === '') {
+      return toError(withHint(new Error('Empty symbol name.'),
+        'Pass the exact symbol name to find references for (e.g. a function/class/const from find or overview).'), rawPath);
+    }
+    const needle = name.trim();
+    const dirPath = validatePath(rawPath, cwd);
+    if (!fs.existsSync(dirPath)) {
+      return toError(withHint(new Error(`Path not found: ${rawPath}`),
+        'Pass a directory (or file) under the server working directory (see info).'), rawPath);
+    }
+    const isFile = fs.statSync(dirPath).isFile();
+    const { files, total } = isFile
+      ? { files: [path.basename(dirPath)], total: 1 }
+      : walkSupportedFiles(dirPath, LIMITS.maxRefFiles);
+    const baseDir = isFile ? path.dirname(dirPath) : dirPath;
+
+    const references: ReferenceEntry[] = [];
+    const skipped: Array<{ file: string; error: string }> = [];
+    let skippedTotal = 0, scanned = 0, refsTruncated = false;
+
+    for (const rel of files) {
+      if (references.length >= LIMITS.maxRefMatches) { refsTruncated = true; break; }
+      const abs = path.join(baseDir, rel);
+      try {
+        const { tree, source } = await parseFile(abs, rel);
+        collectReferences(tree.rootNode, needle, source, rel, references, new Set());
+        scanned++;
+        if (references.length > LIMITS.maxRefMatches) {
+          references.length = LIMITS.maxRefMatches; refsTruncated = true; break;
+        }
+      } catch (e: unknown) {
+        skippedTotal++;
+        if (skipped.length < LIMITS.maxFindSkipped) skipped.push({ file: rel, error: (e as Error).message });
+      }
+    }
+
+    const byKind: Record<string, number> = {};
+    for (const r of references) byKind[r.kind] = (byKind[r.kind] ?? 0) + 1;
+
+    const result: ReferencesResult = {
+      symbol: needle,
+      path: rawPath,
+      references,
+      filesScanned: scanned,
+      totalSupportedFiles: total,
+      truncated: refsTruncated || total > files.length || scanned + skippedTotal < files.length,
+      byKind,
+    };
+    if (skippedTotal > 0) {
+      result.skipped = skipped;
+      if (skippedTotal > skipped.length) result.skippedTotal = skippedTotal;
+    }
+    return result;
+  } catch (e: unknown) {
+    return toError(e, rawPath);
+  }
 }
 
 // --- Tool: function_body ---

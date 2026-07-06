@@ -57,14 +57,53 @@ beforeAll(async () => {
 afterAll(() => { proc?.kill(); });
 
 describe('lens stdio e2e — unified code + docs', () => {
-  test('exposes all 12 tools, each with a rich description', async () => {
+  test('exposes all 13 tools, each with a rich description', async () => {
     const res = await rpc('tools/list', {});
     const names = res.result.tools.map((t: any) => t.name).sort();
     expect(names).toEqual([
       'comments', 'find', 'function_body', 'functions', 'heading',
-      'info', 'lens_system', 'links', 'map', 'outline', 'overview', 'search',
+      'info', 'lens_system', 'links', 'map', 'outline', 'overview', 'references', 'search',
     ]);
     for (const t of res.result.tools) expect(t.description.length).toBeGreaterThan(120);
+  });
+
+  test('find locates non-callable symbols — const/type/enum (issue #2)', async () => {
+    const c = await call('find', { name: 'ALL_MODULES', path: 'test/fixtures', exact: true });
+    // fixture may not have it; assert the mechanism instead on a known TS const
+    const t = await call('find', { name: 'SUPPORTED_EXTENSIONS', path: 'src', exact: true });
+    expect(t.body.matches.some((m: any) => m.kind === 'const')).toBe(true);
+    void c;
+  });
+
+  test('references finds callers/imports and labels the definition (issue #1)', async () => {
+    const { body, isError } = await call('references', { name: 'validatePath', path: 'src' });
+    expect(isError).toBe(false);
+    expect(body.byKind.call).toBeGreaterThan(0);
+    expect(body.byKind.definition).toBeGreaterThan(0);
+    // tree-sitter precision: every hit is a real identifier line
+    expect(body.references.every((r: any) => typeof r.line === 'number')).toBe(true);
+  });
+
+  test('Prisma schema: overview maps models/enums/relations (issue #3)', async () => {
+    const { body, isError } = await call('overview', { path: 'test/fixtures/schema.prisma' });
+    expect(isError).toBe(false);
+    expect(body.language).toBe('prisma');
+    const user = body.models.find((m: any) => m.name === 'User');
+    expect(user.fields.some((f: any) => f.kind === 'relation')).toBe(true);
+    expect(body.enums[0].values).toContain('ADMIN');
+  });
+
+  test('find reaches Prisma models + enums; map lists schemas', async () => {
+    const f = await call('find', { name: 'Role', path: 'test/fixtures', exact: true });
+    expect(f.body.matches.some((m: any) => m.kind === 'enum')).toBe(true);
+    const m = await call('map', { path: 'test/fixtures' });
+    expect(m.body.schemas.some((s: any) => s.models > 0)).toBe(true);
+  });
+
+  test('JSON gets an honest "not mapped" note, not a bare error', async () => {
+    const { body, isError } = await call('overview', { path: 'package.json' });
+    expect(isError).toBe(true);
+    expect(body.hint).toContain('grep');
   });
 
   test('lens_system status reports version + the install dir (not the sandbox cwd)', async () => {
@@ -98,7 +137,7 @@ describe('lens stdio e2e — unified code + docs', () => {
     expect(body.workingDirectory).toBe(CWD);
     expect(body.code.languages.python).toContain('.py');
     expect(body.docs.extensions).toContain('.md');
-    expect(body.tools).toHaveLength(12);
+    expect(body.tools).toHaveLength(13);
   });
 
   test('map returns BOTH code files and docs in one call', async () => {
